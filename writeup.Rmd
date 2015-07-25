@@ -1,0 +1,202 @@
+---
+title: "Pratical Machine Learning Prediction Assignment"
+date: "25 juli 2015"
+output: 
+        html_document:
+                toc: yes
+                toc_depth: 5
+---
+
+### Synopsis  
+#### Background  
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+More information is available from the website here: [http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset). 
+
+#### Goal
+In this project, we use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.  
+
+*  `classe A` - exactly according to the specification  
+*  `classe B` - throwing the elbows to the front  
+*  `classe C` - lifting the dumbbell only halfway  
+*  `classe D` - lowering the dumbbell only halfway  
+*  `classe E` - throwing the hips to the front  
+
+The goal of the project is to predict the manner in which they did the exercise. This is the `classe` variable in the training set.
+We will also use our prediction model to predict 20 different test cases.
+
+
+
+### Data Processing
+```{r, echo=FALSE}
+### set the working directory
+setwd("~/Copy/coursera/08-MachineLearning/project/")
+
+### clean working directory
+rm(list=ls())
+```
+
+#### Needed Library
+```{r, warning=FALSE}
+library(caret)
+library(randomForest)
+```
+
+#### Download and save the data
+The data for this project come from the following source: [http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har).  
+A training dataset and a test dataset are available at:
+
+* training dataset: [https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)  
+* test dataset: [https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)  
+
+```{r, cache=TRUE}
+# Download the data
+trainUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+# Save the data
+download.file(trainUrl, destfile = "./data/pml-training.csv", method = "curl")
+download.file(testUrl, destfile = "./data/pml-testing.csv", method = "curl")
+```
+
+#### Preprocessing the data  
+##### Load the data in R  
+A quick visual grep teaches us that the dataset contains many fields with missing values; NA values as string, empty fields and fields with #DIV/0! values. These fields are converted to `NA` values when read in R.
+
+```{r}
+pmlTraining <- read.csv(file="data/pml-training.csv", 
+                     header = TRUE, 
+                     na.strings = c("NA", "", "#DIV/0!"))
+pmlTesting <- read.csv(file="data/pml-testing.csv", 
+                    header = TRUE, 
+                    na.strings = c("NA", "", "#DIV/0!"))
+dim(pmlTraining); dim(pmlTesting)
+```
+
+##### Tidy the dataset  
+We first remove the columns with `NA` values
+```{r}
+tidyTraining <- pmlTraining[, colSums(is.na(pmlTraining)) == 0]
+tidyTesting <- pmlTesting[, colSums(is.na(pmlTraining)) == 0]
+dim(tidyTraining); dim(tidyTesting)
+```
+
+We also remove the first seventh columns (`X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window and num_window`) which are clearly not relevant for predicting `classe`.  
+```{r}
+tidyTraining <- tidyTraining[, -c(1:7)] 
+tidyTesting <- tidyTesting[, -c(1:7)] 
+dim(tidyTraining); dim(tidyTesting)
+```
+
+We convert all variables to number, except the last column `classe` in tidyTraining and `problem_id` in tidyTesting. 
+```{r}
+for(i in 1:52){
+        tidyTraining[,i] <- as.numeric(tidyTraining[,i])
+        tidyTesting[,i] <- as.numeric(tidyTesting[,i])
+}
+```
+
+#### Create training and test sets  
+We use the `caret` package to slice the dataset into a 70% training and a 30% testing set.  
+```{r, warning=FALSE}
+set.seed(1234)
+# create training set indexes with 70% of data
+inTrain <- createDataPartition(y=tidyTraining$classe, p=0.7, list=FALSE) 
+# subset dataset tidyTraining to training
+training <- tidyTraining[inTrain,]
+# subset the rest of the dataset to testing
+testing <- tidyTraining[-inTrain,]
+dim(training);dim(testing)
+```
+
+#### Preprocessing with Principal Component Analysis (PCA)
+
+We apply PCA to capture the most variation with the least amount of variables
+```{r}
+# find correlated variables
+preProc <- preProcess(tidyTraining[,-53], method="pca", thresh= 0.99)
+preProc
+```
+We can capture 99% of the variability with 36 components.
+
+```{r}
+# calculate PCs for training and testing data
+trainingPC <- predict(preProc, training[,-53])
+testingPC <- predict(preProc, testing[,-53])
+dim(trainingPC); dim(testingPC)
+```
+The number of variables is now reduced to 36.
+
+### Fitting a model with Random Forest  
+
+```{r, cache=TRUE}
+# Training a model can be very time consuming, therefore I save the model on the file system.
+if (file.exists("./data/modelFit.rds")) {
+        modelFit <- readRDS("./data/modelFit.rds")
+} else {
+        modelFit<-train(training$classe ~ .
+                , data=trainingPC
+                , trControl = trainControl(method = "cv")
+                , method="rf"
+                , prox=TRUE)
+
+        saveRDS(modelFit, file = "./data/modelFit.rds")
+}
+modelFit
+```
+
+### Cross Validation
+
+```{r}
+predictionTesting <- predict(modelFit, testingPC, type="raw")
+cMatrix <- confusionMatrix(testing$classe,predictionTesting)
+# Confusion matrix
+cMatrix
+```
+
+**Average accuracy**
+```{r}
+accuracyModel <- cMatrix$overall[['Accuracy']]
+accuracyModel
+```
+
+**Out of Sample Error**
+```{r}
+outOfSampleError <- 1 - accuracyModel
+```
+
+### Predictions for the 20 cases in the test dataset
+```{r}
+preProcTest <- predict(preProc, tidyTesting[, -53] )
+predictTestFinal <- predict(modelFit, preProcTest)
+predictTestFinal
+```
+
+### Prepare sending the predictions
+
+```{r, eval=FALSE}
+# Convert the factor 'predictionTest to a character vector
+predictions <- as.character(predictionTestFinal)
+
+# run the script
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+setwd("./results/")
+pml_write_files(predictions)
+```
+
+
+
+
+
+
+
+
+
+
